@@ -16,7 +16,7 @@ export interface PlaceResult {
 }
 
 const NOMINATIM = 'https://nominatim.openstreetmap.org';
-const OVERPASS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
+const OVERPASS = ['https://overpass-api.de/api/interpreter', 'https://overpass.private.coffee/api/interpreter', 'https://maps.mail.ru/osm/tools/overpass/api/interpreter'];
 
 /** Suche nach Ortsname oder PLZ – nur Verwaltungsgrenzen (Gemeinde/Ortsteil), nur Deutschland. */
 export async function searchPlaces(query: string, signal?: AbortSignal): Promise<PlaceResult[]> {
@@ -73,29 +73,60 @@ function toPlace(r: Record<string, unknown>, plz?: string): PlaceResult | null {
   };
 }
 
-/** Alle Objekte mit addr:housenumber innerhalb der Grenze (Knoten, Wege, Relationen). */
-export async function fetchOsmAddresses(relationId: number, signal?: AbortSignal): Promise<RawAddress[]> {
+type OsmElement = { type: string; id: number; tags?: Record<string, string> };
+
+function toRaw(elements: OsmElement[]): RawAddress[] {
+  const out: RawAddress[] = [];
+  for (const el of elements) {
+    const t = el.tags ?? {};
+    const street = t['addr:street'] || t['addr:place'] || '';
+    for (const n of splitOsmHouseNumbers(t['addr:housenumber'] ?? '')) {
+      out.push({ street, houseNumber: n, postalCode: t['addr:postcode'] ?? '', city: t['addr:city'] ?? '', ref: `osm:${el.type}/${el.id}` });
+    }
+  }
+  return out;
+}
+
+export function overpassQuery(relationId: number): string {
   const areaId = 3600000000 + relationId;
-  const query = `[out:json][timeout:120];area(id:${areaId})->.a;(nwr["addr:housenumber"](area.a););out tags;`;
+  return `[out:json][timeout:50];area(id:${areaId})->.a;(nwr["addr:housenumber"](area.a););out tags;`;
+}
+
+/**
+ * Alle Objekte mit addr:housenumber innerhalb der Grenze (Knoten, Wege, Relationen).
+ * 1. über den eigenen Server (/api/osm/overpass, mehrere Overpass-Server, zuverlässig auch in Safari)
+ * 2. Rückfall: direkt aus dem Browser
+ */
+export async function fetchOsmAddresses(relationId: number, signal?: AbortSignal): Promise<RawAddress[]> {
   let lastErr: unknown = null;
+  try {
+    const res = await fetch('/api/osm/overpass', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ relationId }),
+      signal,
+    });
+    const ct = res.headers.get('content-type') ?? '';
+    if (res.ok && ct.includes('json')) {
+      const json = (await res.json()) as { elements: OsmElement[] };
+      return toRaw(json.elements);
+    }
+    if (ct.includes('json')) lastErr = new Error(((await res.json()) as { error?: string }).error ?? `Server ${res.status}`);
+  } catch (e) {
+    if ((e as Error).name === 'AbortError') throw e;
+    lastErr = e;
+  }
+  const query = overpassQuery(relationId);
   for (const url of OVERPASS) {
     try {
-      const res = await fetch(url, { method: 'POST', body: new URLSearchParams({ data: query }), signal });
+      const res = await fetch(`${url}?data=${encodeURIComponent(query)}`, { signal });
       if (!res.ok) throw new Error(`Overpass ${res.status}`);
-      const json = (await res.json()) as { elements: Array<{ type: string; id: number; tags?: Record<string, string> }> };
-      const out: RawAddress[] = [];
-      for (const el of json.elements) {
-        const t = el.tags ?? {};
-        const street = t['addr:street'] || t['addr:place'] || '';
-        for (const n of splitOsmHouseNumbers(t['addr:housenumber'] ?? '')) {
-          out.push({ street, houseNumber: n, postalCode: t['addr:postcode'] ?? '', city: t['addr:city'] ?? '', ref: `osm:${el.type}/${el.id}` });
-        }
-      }
-      return out;
+      const json = (await res.json()) as { elements: OsmElement[] };
+      return toRaw(json.elements);
     } catch (e) {
       if ((e as Error).name === 'AbortError') throw e;
       lastErr = e;
     }
   }
-  throw new Error(`Adressabruf aus OpenStreetMap fehlgeschlagen: ${(lastErr as Error)?.message ?? 'unbekannt'}`);
+  throw new Error(`Adressabruf aus OpenStreetMap fehlgeschlagen: ${(lastErr as Error)?.message ?? 'unbekannt'}. Bitte in 1–2 Minuten erneut versuchen.`);
 }
