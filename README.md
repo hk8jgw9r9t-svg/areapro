@@ -109,5 +109,3 @@ npm run preview:build && npx http-server preview/dist -p 4173 & npm run e2e   # 
 - **Weitere Importquellen** (amtliche Adressdaten): neue Quelle liefert `RawAddress[]` an `buildImportPlan()`.
 - **Kartenansicht / naheliegende Straßen**: `source_ref` speichert OSM-Objekt-IDs; Koordinaten können ergänzt werden, ohne das Schema zu brechen.
 - **Kalender-Sync der Wiedervorlagen**: iCal-Feed ist bereits umgesetzt (Google/Apple abonnierbar).
-
-
