@@ -18,15 +18,27 @@ const SERVERS = [
 
 type El = { type: string; id: number; tags?: Record<string, string> };
 
-async function runQuery(query: string, errors: string[]): Promise<El[] | null> {
-  for (const url of SERVERS) {
+// Vercel beendet Funktionen nach 60 s → Zeitbudget über alle Versuche verteilen
+const DEADLINE_MS = 55_000;
+let started = 0;
+function remaining() {
+  return DEADLINE_MS - (Date.now() - started);
+}
+
+async function runQuery(query: string, errors: string[], firstTimeout = 38_000): Promise<El[] | null> {
+  for (const [i, url] of SERVERS.entries()) {
     const host = new URL(url).host;
+    const budget = Math.min(i === 0 ? firstTimeout : 20_000, remaining() - 1_500);
+    if (budget < 4_000) {
+      errors.push('Zeitbudget aufgebraucht');
+      break;
+    }
     try {
       const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'AreaPro-D2D/1.0 (Adressimport)' },
         body: new URLSearchParams({ data: query }),
-        signal: AbortSignal.timeout(22_000),
+        signal: AbortSignal.timeout(budget),
         cache: 'no-store',
       });
       if (!res.ok) {
@@ -63,7 +75,7 @@ async function boundingBox(relationId: number): Promise<[number, number, number,
   try {
     const res = await fetch(`https://nominatim.openstreetmap.org/lookup?osm_ids=R${relationId}&format=json`, {
       headers: { 'User-Agent': 'AreaPro-D2D/1.0 (Adressimport)', 'Accept-Language': 'de' },
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(Math.max(2_000, Math.min(8_000, remaining() - 12_000))),
     });
     const j = (await res.json()) as { boundingbox?: string[] }[];
     const b = j[0]?.boundingbox?.map(Number);
@@ -81,15 +93,17 @@ export async function POST(req: Request) {
   const errors: string[] = [];
 
   // 1. Verwaltungsgrenze
-  const q1 = `[out:json][timeout:45];rel(${relationId});map_to_area->.a;(nwr["addr:housenumber"](area.a););out tags;`;
+  started = Date.now();
+  const q1 = `[out:json][timeout:40][maxsize:268435456];rel(${relationId});map_to_area->.a;(nwr["addr:housenumber"](area.a););out tags qt;`;
   const inArea = await runQuery(q1, errors);
   if (inArea && inArea.length) return json({ elements: inArea, method: 'boundary' });
 
   // 2. Begrenzungsrechteck + Filter auf PLZ / Ortsname
   const bbox = await boundingBox(relationId);
   if (bbox) {
-    const q2 = `[out:json][timeout:45];(nwr["addr:housenumber"](${bbox.join(',')}););out tags;`;
-    const inBox = await runQuery(q2, errors);
+    if (remaining() < 10_000) return fail(`OpenStreetMap-Server ausgelastet – bitte in 1–2 Minuten erneut versuchen (${errors.slice(0, 3).join('; ')})`, 503);
+    const q2 = `[out:json][timeout:25];(nwr["addr:housenumber"](${bbox.join(',')}););out tags;`;
+    const inBox = await runQuery(q2, errors, 25_000);
     if (inBox) {
       const plz = new Set((body.postalCodes ?? []).filter((p) => /^\d{5}$/.test(p)));
       const name = norm(body.name ?? '');
