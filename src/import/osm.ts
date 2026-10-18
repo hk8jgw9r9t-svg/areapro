@@ -88,8 +88,7 @@ function toRaw(elements: OsmElement[]): RawAddress[] {
 }
 
 export function overpassQuery(relationId: number): string {
-  const areaId = 3600000000 + relationId;
-  return `[out:json][timeout:50];area(id:${areaId})->.a;(nwr["addr:housenumber"](area.a););out tags;`;
+  return `[out:json][timeout:50];rel(${relationId});map_to_area->.a;(nwr["addr:housenumber"](area.a););out tags;`;
 }
 
 /**
@@ -97,13 +96,13 @@ export function overpassQuery(relationId: number): string {
  * 1. über den eigenen Server (/api/osm/overpass, mehrere Overpass-Server, zuverlässig auch in Safari)
  * 2. Rückfall: direkt aus dem Browser
  */
-export async function fetchOsmAddresses(relationId: number, signal?: AbortSignal): Promise<RawAddress[]> {
+export async function fetchOsmAddresses(relationId: number, signal?: AbortSignal, place?: { name: string; postalCodes: string[] }): Promise<RawAddress[]> {
   let lastErr: unknown = null;
   try {
     const res = await fetch('/api/osm/overpass', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ relationId }),
+      body: JSON.stringify({ relationId, name: place?.name ?? '', postalCodes: place?.postalCodes ?? [] }),
       signal,
     });
     const ct = res.headers.get('content-type') ?? '';

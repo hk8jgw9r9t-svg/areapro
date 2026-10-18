@@ -78,7 +78,7 @@ function OsmImport({ refreshTown }: { refreshTown: ReturnType<typeof store.get<'
     setLoading(true);
     setError(null);
     try {
-      const raw = await fetchOsmAddresses(picked.osmId);
+      const raw = await fetchOsmAddresses(picked.osmId, undefined, { name: picked.name, postalCodes: picked.postalCodes });
       const existing = refreshTown ?? store.all('towns').find((t) => t.osm_relation_id === picked.osmId) ?? null;
       setPlan(
         buildImportPlan(raw, 'osm', { town: existing, name: picked.name, postal_codes: picked.postalCodes, state: picked.state, osm_relation_id: picked.osmId }, { compareMissing: !!existing }),
@@ -188,6 +188,12 @@ function PlanPreview({ plan, mode, onCancel }: { plan: ImportPlan; mode: 'initia
         {mode === 'refresh' && stat('in Quelle verschwunden → prüfen', s.missingInSource, s.missingInSource ? '#b91c1c' : undefined)}
         {s.invalidNumber > 0 && stat('ungültige Nummern', s.invalidNumber)}
       </div>
+      {s.addressesFound === 0 && (
+        <div className="warn-box">
+          <Icon name="alert" size={18} />
+          <span>Für diesen Ort wurden in OpenStreetMap keine Adressen gefunden. Bitte in 1–2 Minuten erneut versuchen oder Adressen per CSV/Excel bzw. manuell anlegen.</span>
+        </div>
+      )}
       {s.foreignCity > 0 && <div className="muted small">Hinweis: {s.foreignCity} Adressen tragen einen anderen Ortsnamen (z. B. Ortsteil) – sie liegen innerhalb der Gemeindegrenze und werden übernommen.</div>}
       {plan.samplesWithoutStreet.length > 0 && <div className="muted small">Ohne Straße (nicht übernommen): {plan.samplesWithoutStreet.join(', ')} …</div>}
       {plan.streets.length > 0 && (
@@ -218,7 +224,7 @@ function PlanPreview({ plan, mode, onCancel }: { plan: ImportPlan; mode: 'initia
         <Button variant="ghost" size="lg" onClick={onCancel} icon="x">
           Import abbrechen
         </Button>
-        <Button variant="primary" size="lg" icon="check" onClick={confirm} disabled={!s.newAddresses && !s.missingInSource && mode !== 'initial'}>
+        <Button variant="primary" size="lg" icon="check" onClick={confirm} disabled={!s.newAddresses && !s.missingInSource}>
           Import bestätigen
         </Button>
       </div>
